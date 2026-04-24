@@ -7,6 +7,22 @@ echo "  3x-ui + SSL (DNSExit) Installer"
 echo "====================================="
 
 # -------------------------
+# SYSTEM UPDATE (SAFE)
+# -------------------------
+echo "[+] Updating system..."
+
+export DEBIAN_FRONTEND=noninteractive
+
+apt update
+apt full-upgrade -y
+apt install -y curl openssl ca-certificates
+
+apt autoremove -y
+apt clean
+
+echo "[+] System updated"
+
+# -------------------------
 # INPUTS
 # -------------------------
 read -p "Enter your domain (example: site.com): " DOMAIN
