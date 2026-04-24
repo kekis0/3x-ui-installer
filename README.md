@@ -10,4 +10,5 @@ Run this command on your server:
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/kekis0/3x-ui-installer/main/install.sh)
-
+or:
+curl -Ls https://raw.githubusercontent.com/kekis0/3x-ui-installer/main/install.sh | bash
