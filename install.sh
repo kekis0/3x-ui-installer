@@ -124,7 +124,9 @@ echo "====================================="
 echo " INSTALL COMPLETE"
 echo " SSL READY"
 echo "====================================="
-
+echo " Input certificate path (keywords: .crt / fullchain): /etc/ssl/dnsexit/fullchain.crt
+"
+echo " Input private key path (keywords: .key / privatekey): /etc/ssl/dnsexit/key.key"
 # -------------------------
 # INSTALL 3X-UI
 # -------------------------
