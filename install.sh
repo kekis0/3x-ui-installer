@@ -36,14 +36,7 @@ echo "[+] API key saved"
 # -------------------------
 apt update && apt install curl openssl -y
 
-# -------------------------
-# INSTALL 3X-UI
-# -------------------------
-echo "[+] Installing 3x-ui..."
-bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
 
-systemctl enable x-ui
-systemctl restart x-ui
 
 # -------------------------
 # FOLDERS
@@ -129,7 +122,11 @@ echo "[+] Generating SSL..."
 # -------------------------
 echo "====================================="
 echo " INSTALL COMPLETE"
-echo " DOMAIN: $DOMAIN"
-echo " 3x-ui: http://SERVER_IP:2053"
 echo " SSL READY"
 echo "====================================="
+
+# -------------------------
+# INSTALL 3X-UI
+# -------------------------
+echo "[+] Installing 3x-ui..."
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
