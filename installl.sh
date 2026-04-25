@@ -1,136 +1,176 @@
 #!/bin/bash
-
 set -e
 
 echo "====================================="
-echo "        WEB LAYER (NGINX)"
+echo "  3x-ui PRO Installer (Nginx + SSL)"
 echo "====================================="
 
 export DEBIAN_FRONTEND=noninteractive
 
 # -------------------------
-# INPUT DOMAIN
+# SYSTEM UPDATE
+# -------------------------
+echo "[+] Updating system..."
+apt update && apt full-upgrade -y
+apt install -y curl nginx openssl ca-certificates ufw cron
+
+apt autoremove -y
+apt clean
+
+# -------------------------
+# INPUTS
 # -------------------------
 read -p "Enter your domain (example: site.com): " DOMAIN
+read -p "Enter DNSExit API key: " APIKEY
+read -p "Enter 3x-ui internal port (default 10000): " PORT
 
-read -p "Enter your panel path (example: $DOMAIN/...): " PANEL_PATH
+PORT=${PORT:-10000}
 
-
-# -------------------------
-# INSTALL NGINX
-# -------------------------
-echo "[+] Installing nginx..."
-apt update -y
-apt install -y nginx
+echo "[+] Domain: $DOMAIN"
+echo "[+] Port: $PORT"
 
 # -------------------------
-# SSL PATHS (from your previous script)
+# FOLDERS
 # -------------------------
-SSL_CERT="/etc/ssl/dnsexit/fullchain.crt"
-SSL_KEY="/etc/ssl/dnsexit/key.key"
-
-# safety check
-if [ ! -f "$SSL_CERT" ] || [ ! -f "$SSL_KEY" ]; then
-  echo "❌ SSL files not found!"
-  echo "Expected:"
-  echo "$SSL_CERT"
-  echo "$SSL_KEY"
-  exit 1
-fi
+mkdir -p /etc/dnsexit
+mkdir -p /etc/ssl/dnsexit
+mkdir -p /opt/ssl
 
 # -------------------------
-# NGINX CONFIG
+# DNSExit API payloads
 # -------------------------
-echo "[+] Creating nginx config..."
+cat > /etc/dnsexit/cert.json <<EOF
+{
+  "apikey": "$APIKEY",
+  "domain": "$DOMAIN",
+  "action": "download",
+  "file": "cert"
+}
+EOF
 
-cat > /etc/nginx/sites-available/xui.conf <<EOF
-server {
-    listen 443 ssl;
-    server_name $DOMAIN;
-
-    ssl_certificate $SSL_CERT;
-    ssl_certificate_key $SSL_KEY;
-
-    # -------------------------
-    # MAIN SITE (XRY)
-    # -------------------------
-    location / {
-        proxy_pass http://127.0.0.1:1000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-    }
-
-    # -------------------------
-    # FIXED PANEL PATH
-    # -------------------------
-    location /subbus {
-        proxy_pass http://127.0.0.1:2096;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-    }
-
-    # -------------------------
-    # RANDOM PANEL PATH
-    # -------------------------
-    location /$PANEL_PATH {
-        proxy_pass http://127.0.0.1:2053;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-    }
-
-    # websocket support (important for x-ui)
-    location /$PANEL_PATH/ws {
-        proxy_pass http://127.0.0.1:2053/ws;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-
-    location /subbus/ws {
-        proxy_pass http://127.0.0.1:2096/ws;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
+cat > /etc/dnsexit/key.json <<EOF
+{
+  "apikey": "$APIKEY",
+  "domain": "$DOMAIN",
+  "action": "download",
+  "file": "privatekey"
 }
 EOF
 
 # -------------------------
-# ENABLE SITE
+# SSL FETCH SCRIPT
 # -------------------------
-ln -sf /etc/nginx/sites-available/xui.conf /etc/nginx/sites-enabled/xui.conf
+cat > /opt/ssl/fetch-cert.sh <<'EOF'
+#!/bin/bash
 
-# remove default site (IMPORTANT)
-rm -f /etc/nginx/sites-enabled/default
+API="https://api.dnsexit.com/dns/lse.jsp"
+
+curl -s -H "Content-Type: application/json" \
+--data @/etc/dnsexit/cert.json \
+$API > /etc/ssl/dnsexit/cert.crt
+
+curl -s -H "Content-Type: application/json" \
+--data @/etc/dnsexit/key.json \
+$API > /etc/ssl/dnsexit/key.key
+
+chmod 600 /etc/ssl/dnsexit/key.key
+EOF
 
 # -------------------------
-# TEST + RESTART
+# FULLCHAIN BUILD
 # -------------------------
-nginx -t
-systemctl restart nginx
+cat > /opt/ssl/build-fullchain.sh <<'EOF'
+#!/bin/bash
+
+CERT="/etc/ssl/dnsexit/cert.crt"
+CHAIN="/etc/ssl/dnsexit/chain.pem"
+FULLCHAIN="/etc/ssl/dnsexit/fullchain.crt"
+
+curl -s https://letsencrypt.org/certs/2024/r12.pem -o $CHAIN
+
+cat $CERT $CHAIN > $FULLCHAIN
+
+chmod 644 $FULLCHAIN
+EOF
+
+chmod +x /opt/ssl/fetch-cert.sh
+chmod +x /opt/ssl/build-fullchain.sh
 
 # -------------------------
-# FIREWALL (optional safe)
+# FIRST SSL RUN
 # -------------------------
-ufw allow 80 || true
-ufw allow 443 || true
+echo "[+] Generating SSL..."
+/opt/ssl/fetch-cert.sh
+/opt/ssl/build-fullchain.sh
 
 # -------------------------
-# RESULT
+# NGINX CONFIG
+# -------------------------
+echo "[+] Configuring Nginx..."
+
+cat > /etc/nginx/sites-available/xray <<EOF
+server {
+    listen 80;
+    server_name $DOMAIN;
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $DOMAIN;
+
+    ssl_certificate /etc/ssl/dnsexit/fullchain.crt;
+    ssl_certificate_key /etc/ssl/dnsexit/key.key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    location / {
+        proxy_pass http://127.0.0.1:$PORT;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    }
+}
+EOF
+
+ln -sf /etc/nginx/sites-available/xray /etc/nginx/sites-enabled/xray
+
+nginx -t && systemctl restart nginx
+
+# -------------------------
+# FIREWALL
+# -------------------------
+echo "[+] Configuring firewall..."
+
+ufw allow OpenSSH
+ufw allow 80
+ufw allow 443
+ufw --force enable
+
+# -------------------------
+# AUTO RENEW CRON
+# -------------------------
+(crontab -l 2>/dev/null; echo "0 4 1 * * /opt/ssl/fetch-cert.sh && /opt/ssl/build-fullchain.sh && systemctl reload nginx") | crontab -
+
+# -------------------------
+# INSTALL 3X-UI
+# -------------------------
+echo "[+] Installing 3x-ui..."
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+
+# -------------------------
+# DONE
 # -------------------------
 echo "====================================="
-echo "        DONE"
+echo " INSTALL COMPLETE"
 echo "====================================="
-echo "MAIN SITE:"
-echo "https://$DOMAIN/"
-echo ""
-echo "PANEL (fixed):"
-echo "https://$DOMAIN/subbus"
-echo ""
-echo "PANEL (random):"
-echo "https://$DOMAIN/$PANEL_PATH"
-echo ""
-echo "IMPORTANT:"
-echo "- 3x-ui must be running on 127.0.0.1:2053"
-echo "- Your site must be on 127.0.0.1:1000"
+echo " Domain: https://$DOMAIN"
+echo " Nginx proxy: 443 → 127.0.0.1:$PORT"
+echo " SSL: /etc/ssl/dnsexit/fullchain.crt"
+echo " Key: /etc/ssl/dnsexit/key.key"
 echo "====================================="
