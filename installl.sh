@@ -85,7 +85,7 @@ server {
         proxy_set_header Connection "upgrade";
     }
 
-    location /sabbas/ws {
+    location /subbus/ws {
         proxy_pass http://127.0.0.1:2053/ws;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
