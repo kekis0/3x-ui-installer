@@ -3,44 +3,40 @@
 set -e
 
 echo "====================================="
-echo " FULL INSTALL (SSL → 3x-ui → NGINX)"
+echo " SAFE INSTALL (ANTI-ERROR VERSION)"
 echo "====================================="
 
 # -------------------------
 # WAIT APT LOCK
 # -------------------------
-echo "[+] Waiting for apt lock..."
+echo "[+] Checking apt lock..."
 while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-    sleep 3
+    sleep 2
 done
 
-# -------------------------
-# SYSTEM UPDATE
-# -------------------------
 export DEBIAN_FRONTEND=noninteractive
 
-apt update
-apt full-upgrade -y
-apt install -y curl openssl ca-certificates nginx sqlite3
+apt update -y
+apt install -y curl openssl ca-certificates nginx sqlite3 jq
 
 # -------------------------
 # INPUT
 # -------------------------
-read -p "Enter domain: " DOMAIN
-read -p "Enter DNSExit API key: " APIKEY
+read -p "DOMAIN: " DOMAIN
+read -p "DNSExit API KEY: " APIKEY
 
 # -------------------------
-# DIRS
+# FOLDERS
 # -------------------------
 mkdir -p /etc/dnsexit
 mkdir -p /etc/ssl/dnsexit
 mkdir -p /opt/ssl
-mkdir -p /var/www/site
+mkdir -p /var/www/html
 
-echo "OK" > /var/www/site/index.html
+echo "OK" > /var/www/html/index.html
 
 # -------------------------
-# API FILES
+# SSL REQUEST FILES
 # -------------------------
 cat > /etc/dnsexit/cert.json <<EOF
 {
@@ -61,50 +57,54 @@ cat > /etc/dnsexit/key.json <<EOF
 EOF
 
 # -------------------------
-# FETCH CERT
+# SAFE FETCH CERT
 # -------------------------
-cat > /opt/ssl/fetch-cert.sh <<'EOF'
-#!/bin/bash
-API="https://api.dnsexit.com/dns/lse.jsp"
+fetch_ssl() {
+    echo "[+] Requesting SSL..."
 
-curl -s -H "Content-Type: application/json" \
---data @/etc/dnsexit/cert.json \
-$API > /etc/ssl/dnsexit/cert.crt
+    curl -s -H "Content-Type: application/json" \
+    --data @/etc/dnsexit/cert.json \
+    https://api.dnsexit.com/dns/lse.jsp > /etc/ssl/dnsexit/cert.crt
 
-curl -s -H "Content-Type: application/json" \
---data @/etc/dnsexit/key.json \
-$API > /etc/ssl/dnsexit/key.key
+    curl -s -H "Content-Type: application/json" \
+    --data @/etc/dnsexit/key.json \
+    https://api.dnsexit.com/dns/lse.jsp > /etc/ssl/dnsexit/key.key
 
-chmod 600 /etc/ssl/dnsexit/key.key
-EOF
+    # -------------------------
+    # VALIDATE CERT
+    # -------------------------
+    if ! grep -q "BEGIN CERTIFICATE" /etc/ssl/dnsexit/cert.crt; then
+        echo "❌ ERROR: Cert is not valid (API returned garbage)"
+        cat /etc/ssl/dnsexit/cert.crt
+        exit 1
+    fi
 
-# -------------------------
-# BUILD FULLCHAIN
-# -------------------------
-cat > /opt/ssl/build-fullchain.sh <<'EOF'
-#!/bin/bash
-
-CERT="/etc/ssl/dnsexit/cert.crt"
-CHAIN="/etc/ssl/dnsexit/chain.pem"
-FULLCHAIN="/etc/ssl/dnsexit/fullchain.crt"
-
-curl -s https://letsencrypt.org/certs/2024/r12.pem -o $CHAIN
-
-cat $CERT $CHAIN > $FULLCHAIN
-EOF
-
-chmod +x /opt/ssl/*.sh
+    chmod 600 /etc/ssl/dnsexit/key.key
+}
 
 # -------------------------
-# GENERATE SSL FIRST
+# BUILD FULLCHAIN SAFE
 # -------------------------
-echo "[+] Generating SSL..."
-/opt/ssl/fetch-cert.sh
-/opt/ssl/build-fullchain.sh
+build_chain() {
+    echo "[+] Building fullchain..."
 
-echo "[+] SSL ready:"
-echo "/etc/ssl/dnsexit/fullchain.crt"
-echo "/etc/ssl/dnsexit/key.key"
+    curl -s https://letsencrypt.org/certs/2024/r12.pem -o /etc/ssl/dnsexit/chain.pem
+
+    cat /etc/ssl/dnsexit/cert.crt /etc/ssl/dnsexit/chain.pem > /etc/ssl/dnsexit/fullchain.crt
+
+    # verify
+    openssl x509 -in /etc/ssl/dnsexit/fullchain.crt -noout >/dev/null
+
+    if [ $? -ne 0 ]; then
+        echo "❌ FULLCHAIN INVALID"
+        exit 1
+    fi
+}
+
+fetch_ssl
+build_chain
+
+echo "[+] SSL OK"
 
 # -------------------------
 # INSTALL 3X-UI
@@ -113,19 +113,26 @@ echo "[+] Installing 3x-ui..."
 bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
 
 # -------------------------
-# AUTO INBOUND
+# FORCE SETTINGS
 # -------------------------
+echo "[+] Configuring x-ui..."
+
 UUID=$(cat /proc/sys/kernel/random/uuid)
 
 sqlite3 /etc/x-ui/x-ui.db <<EOF
-INSERT INTO inbounds 
-(port, protocol, settings, stream_settings, remark, enable)
-VALUES 
-(10000, 'vless',
+DELETE FROM inbounds;
+INSERT INTO inbounds (port, protocol, settings, stream_settings, remark, enable)
+VALUES (
+10000,
+'vless',
 '{"clients":[{"id":"$UUID"}],"decryption":"none"}',
 '{"network":"ws","security":"none","wsSettings":{"path":"/ray"}}',
-'auto', 1);
+'auto',
+1
+);
 EOF
+
+systemctl restart x-ui
 
 # -------------------------
 # NGINX CONFIG
@@ -144,11 +151,8 @@ server {
     ssl_certificate     /etc/ssl/dnsexit/fullchain.crt;
     ssl_certificate_key /etc/ssl/dnsexit/key.key;
 
-    root /var/www/site;
-    index index.html;
-
     location / {
-        try_files \$uri \$uri/ =404;
+        root /var/www/html;
     }
 
     location /ray {
@@ -156,45 +160,28 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
     }
 
     location /panel {
         proxy_pass http://127.0.0.1:2053;
     }
-
-    location /subbus {
-        proxy_pass http://127.0.0.1:2053;
-    }
 }
 EOF
 
-# -------------------------
-# RESTART
-# -------------------------
 nginx -t
 systemctl restart nginx
-systemctl restart x-ui
-
-# -------------------------
-# CRON
-# -------------------------
-(crontab -l 2>/dev/null; echo "0 4 1 * * /opt/ssl/fetch-cert.sh && /opt/ssl/build-fullchain.sh && systemctl restart nginx") | crontab -
 
 # -------------------------
 # OUTPUT
 # -------------------------
 echo "====================================="
-echo " DONE!"
+echo " DONE SAFE INSTALL"
 echo "====================================="
-echo "Site: https://$DOMAIN"
-echo "Panel: https://$DOMAIN/panel"
-echo "Subscription: https://$DOMAIN/subbus/..."
+echo "SITE: https://$DOMAIN"
+echo "PANEL: https://$DOMAIN/panel"
 echo ""
 echo "VLESS:"
-echo "Address: $DOMAIN"
-echo "Port: 443"
 echo "UUID: $UUID"
-echo "Path: /ray"
-echo "TLS: ON"
+echo "PORT: 443"
+echo "PATH: /ray"
 echo "====================================="
