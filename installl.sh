@@ -12,7 +12,7 @@ export DEBIAN_FRONTEND=noninteractive
 # INPUT DOMAIN
 # -------------------------
 read -p "Enter your domain (example: site.com): " DOMAIN
-read -p "Enter your panel path (example: $DOMAIN/...): " DOMAIN
+read -p "Enter your panel path (example: $DOMAIN/...): " PANEL_PATH
 
 
 # -------------------------
