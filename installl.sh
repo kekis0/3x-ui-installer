@@ -12,14 +12,8 @@ export DEBIAN_FRONTEND=noninteractive
 # INPUT DOMAIN
 # -------------------------
 read -p "Enter your domain (example: site.com): " DOMAIN
+read -p "Enter your panel path (example: $DOMAIN/...): " DOMAIN
 
-# -------------------------
-# RANDOM PANEL PATH
-# -------------------------
-PANEL_PATH=$(openssl rand -hex 12)
-
-echo "[+] Domain: $DOMAIN"
-echo "[+] Panel path: /$PANEL_PATH"
 
 # -------------------------
 # INSTALL NGINX
@@ -68,7 +62,7 @@ server {
     # -------------------------
     # FIXED PANEL PATH
     # -------------------------
-    location /sabbas {
+    location /subbus {
         proxy_pass http://127.0.0.1:2053;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
