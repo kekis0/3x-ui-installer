@@ -3,92 +3,139 @@
 set -e
 
 echo "====================================="
-echo " WEB LAYER INSTALL (NGINX + SSL)"
+echo "        WEB LAYER (NGINX)"
 echo "====================================="
 
-# -------------------------
-# INPUTS
-# -------------------------
-read -p "Enter domain (example.com): " DOMAIN
+export DEBIAN_FRONTEND=noninteractive
 
-read -p "Enter SSL cert path (fullchain.crt): " CERT
-read -p "Enter SSL key path (key.key): " KEY
+# -------------------------
+# INPUT DOMAIN
+# -------------------------
+read -p "Enter your domain (example: site.com): " DOMAIN
+
+# -------------------------
+# RANDOM PANEL PATH
+# -------------------------
+PANEL_PATH=$(openssl rand -hex 12)
+
+echo "[+] Domain: $DOMAIN"
+echo "[+] Panel path: /$PANEL_PATH"
 
 # -------------------------
 # INSTALL NGINX
 # -------------------------
-apt update
+echo "[+] Installing nginx..."
+apt update -y
 apt install -y nginx
 
 # -------------------------
-# BASIC SITE
+# SSL PATHS (from your previous script)
 # -------------------------
-mkdir -p /var/www/site
-echo "<h1>OK - SERVER ONLINE</h1>" > /var/www/site/index.html
+SSL_CERT="/etc/ssl/dnsexit/fullchain.crt"
+SSL_KEY="/etc/ssl/dnsexit/key.key"
+
+# safety check
+if [ ! -f "$SSL_CERT" ] || [ ! -f "$SSL_KEY" ]; then
+  echo "❌ SSL files not found!"
+  echo "Expected:"
+  echo "$SSL_CERT"
+  echo "$SSL_KEY"
+  exit 1
+fi
 
 # -------------------------
 # NGINX CONFIG
 # -------------------------
-cat > /etc/nginx/sites-available/default <<EOF
+echo "[+] Creating nginx config..."
 
-server {
-    listen 80;
-    server_name $DOMAIN;
-    return 301 https://\$host\$request_uri;
-}
-
+cat > /etc/nginx/sites-available/xui.conf <<EOF
 server {
     listen 443 ssl;
     server_name $DOMAIN;
 
-    ssl_certificate     $CERT;
-    ssl_certificate_key $KEY;
+    ssl_certificate $SSL_CERT;
+    ssl_certificate_key $SSL_KEY;
 
-    # ---------------- SITE ----------------
+    # -------------------------
+    # MAIN SITE (XRY)
+    # -------------------------
     location / {
-        root /var/www/site;
-        index index.html;
+        proxy_pass http://127.0.0.1:1000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
     }
 
-    # ---------------- 3X-UI PANEL ----------------
-    location /panel {
+    # -------------------------
+    # FIXED PANEL PATH
+    # -------------------------
+    location /sabbas {
         proxy_pass http://127.0.0.1:2053;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
     }
 
-    # ---------------- XRAY / VLESS WS ----------------
-    location /ray {
-        proxy_pass http://127.0.0.1:10000;
+    # -------------------------
+    # RANDOM PANEL PATH
+    # -------------------------
+    location /$PANEL_PATH {
+        proxy_pass http://127.0.0.1:2053;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }
+
+    # websocket support (important for x-ui)
+    location /$PANEL_PATH/ws {
+        proxy_pass http://127.0.0.1:2053/ws;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
     }
 
-    # ---------------- SUBSCRIPTION ----------------
-    location /subbus {
-        proxy_pass http://127.0.0.1:2053;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
+    location /sabbas/ws {
+        proxy_pass http://127.0.0.1:2053/ws;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
     }
 }
-
 EOF
 
 # -------------------------
-# TEST & RESTART
+# ENABLE SITE
+# -------------------------
+ln -sf /etc/nginx/sites-available/xui.conf /etc/nginx/sites-enabled/xui.conf
+
+# remove default site (IMPORTANT)
+rm -f /etc/nginx/sites-enabled/default
+
+# -------------------------
+# TEST + RESTART
 # -------------------------
 nginx -t
 systemctl restart nginx
 
 # -------------------------
-# DONE
+# FIREWALL (optional safe)
+# -------------------------
+ufw allow 80 || true
+ufw allow 443 || true
+
+# -------------------------
+# RESULT
 # -------------------------
 echo "====================================="
-echo " WEB LAYER READY"
+echo "        DONE"
 echo "====================================="
-echo "https://$DOMAIN"
-echo "https://$DOMAIN/panel"
-echo "https://$DOMAIN/subbus"
+echo "MAIN SITE:"
+echo "https://$DOMAIN/"
+echo ""
+echo "PANEL (fixed):"
+echo "https://$DOMAIN/sabbas"
+echo ""
+echo "PANEL (random):"
+echo "https://$DOMAIN/$PANEL_PATH"
+echo ""
+echo "IMPORTANT:"
+echo "- 3x-ui must be running on 127.0.0.1:2053"
+echo "- Your site must be on 127.0.0.1:1000"
 echo "====================================="
