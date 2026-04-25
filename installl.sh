@@ -64,7 +64,7 @@ server {
     # FIXED PANEL PATH
     # -------------------------
     location /subbus {
-        proxy_pass http://127.0.0.1:2053;
+        proxy_pass http://127.0.0.1:2096;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
     }
@@ -87,7 +87,7 @@ server {
     }
 
     location /subbus/ws {
-        proxy_pass http://127.0.0.1:2053/ws;
+        proxy_pass http://127.0.0.1:2096/ws;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
