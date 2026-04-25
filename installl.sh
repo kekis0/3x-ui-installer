@@ -12,6 +12,7 @@ export DEBIAN_FRONTEND=noninteractive
 # INPUT DOMAIN
 # -------------------------
 read -p "Enter your domain (example: site.com): " DOMAIN
+
 read -p "Enter your panel path (example: $DOMAIN/...): " PANEL_PATH
 
 
@@ -124,7 +125,7 @@ echo "MAIN SITE:"
 echo "https://$DOMAIN/"
 echo ""
 echo "PANEL (fixed):"
-echo "https://$DOMAIN/sabbas"
+echo "https://$DOMAIN/subbus"
 echo ""
 echo "PANEL (random):"
 echo "https://$DOMAIN/$PANEL_PATH"
