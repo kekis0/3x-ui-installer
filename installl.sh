@@ -1,43 +1,38 @@
 #!/bin/bash
+
 set -e
 
 echo "====================================="
-echo "  3x-ui PRO Installer (Nginx + SSL)"
+echo "  3x-ui + SSL + Nginx Fallback Setup"
 echo "====================================="
 
 export DEBIAN_FRONTEND=noninteractive
 
 # -------------------------
-# SYSTEM UPDATE
+# UPDATE
 # -------------------------
-echo "[+] Updating system..."
-apt update && apt full-upgrade -y
-apt install -y curl nginx openssl ca-certificates ufw cron
+apt update
+apt full-upgrade -y
+apt install -y curl openssl ca-certificates nginx
 
 apt autoremove -y
 apt clean
 
 # -------------------------
-# INPUTS
+# INPUT
 # -------------------------
-read -p "Enter your domain (example: site.com): " DOMAIN
+read -p "Enter your domain (example.com): " DOMAIN
 read -p "Enter DNSExit API key: " APIKEY
-read -p "Enter 3x-ui internal port (default 10000): " PORT
-
-PORT=${PORT:-10000}
-
-echo "[+] Domain: $DOMAIN"
-echo "[+] Port: $PORT"
 
 # -------------------------
-# FOLDERS
+# SSL DIRS
 # -------------------------
 mkdir -p /etc/dnsexit
 mkdir -p /etc/ssl/dnsexit
 mkdir -p /opt/ssl
 
 # -------------------------
-# DNSExit API payloads
+# API FILES
 # -------------------------
 cat > /etc/dnsexit/cert.json <<EOF
 {
@@ -58,7 +53,7 @@ cat > /etc/dnsexit/key.json <<EOF
 EOF
 
 # -------------------------
-# SSL FETCH SCRIPT
+# FETCH SSL
 # -------------------------
 cat > /opt/ssl/fetch-cert.sh <<'EOF'
 #!/bin/bash
@@ -77,7 +72,7 @@ chmod 600 /etc/ssl/dnsexit/key.key
 EOF
 
 # -------------------------
-# FULLCHAIN BUILD
+# BUILD FULLCHAIN
 # -------------------------
 cat > /opt/ssl/build-fullchain.sh <<'EOF'
 #!/bin/bash
@@ -93,69 +88,58 @@ cat $CERT $CHAIN > $FULLCHAIN
 chmod 644 $FULLCHAIN
 EOF
 
-chmod +x /opt/ssl/fetch-cert.sh
-chmod +x /opt/ssl/build-fullchain.sh
+chmod +x /opt/ssl/*.sh
 
 # -------------------------
-# FIRST SSL RUN
+# GENERATE SSL
 # -------------------------
 echo "[+] Generating SSL..."
 /opt/ssl/fetch-cert.sh
 /opt/ssl/build-fullchain.sh
 
 # -------------------------
-# NGINX CONFIG
+# CRON
+# -------------------------
+(crontab -l 2>/dev/null; echo "0 4 1 * * /opt/ssl/fetch-cert.sh && /opt/ssl/build-fullchain.sh && systemctl restart xray") | crontab -
+
+# -------------------------
+# NGINX SETUP (FAKE SITE)
 # -------------------------
 echo "[+] Configuring Nginx..."
 
-cat > /etc/nginx/sites-available/xray <<EOF
+cat > /etc/nginx/sites-available/default <<EOF
 server {
-    listen 80;
-    server_name $DOMAIN;
-    return 301 https://\$host\$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
+    listen 127.0.0.1:8080;
     server_name $DOMAIN;
 
-    ssl_certificate /etc/ssl/dnsexit/fullchain.crt;
-    ssl_certificate_key /etc/ssl/dnsexit/key.key;
-
-    ssl_protocols TLSv1.2 TLSv1.3;
+    root /var/www/html;
+    index index.html;
 
     location / {
-        proxy_pass http://127.0.0.1:$PORT;
-
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        try_files \$uri \$uri/ =404;
     }
 }
 EOF
 
-ln -sf /etc/nginx/sites-available/xray /etc/nginx/sites-enabled/xray
-
-nginx -t && systemctl restart nginx
-
 # -------------------------
-# FIREWALL
+# FAKE WEBSITE
 # -------------------------
-echo "[+] Configuring firewall..."
+mkdir -p /var/www/html
 
-ufw allow OpenSSH
-ufw allow 80
-ufw allow 443
-ufw --force enable
+cat > /var/www/html/index.html <<EOF
+<!DOCTYPE html>
+<html>
+<head>
+  <title>$DOMAIN</title>
+</head>
+<body>
+  <h1>Welcome</h1>
+  <p>Website is under maintenance.</p>
+</body>
+</html>
+EOF
 
-# -------------------------
-# AUTO RENEW CRON
-# -------------------------
-(crontab -l 2>/dev/null; echo "0 4 1 * * /opt/ssl/fetch-cert.sh && /opt/ssl/build-fullchain.sh && systemctl reload nginx") | crontab -
+systemctl restart nginx
 
 # -------------------------
 # INSTALL 3X-UI
@@ -163,14 +147,15 @@ ufw --force enable
 echo "[+] Installing 3x-ui..."
 bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
 
-# -------------------------
-# DONE
-# -------------------------
 echo "====================================="
 echo " INSTALL COMPLETE"
 echo "====================================="
-echo " Domain: https://$DOMAIN"
-echo " Nginx proxy: 443 → 127.0.0.1:$PORT"
-echo " SSL: /etc/ssl/dnsexit/fullchain.crt"
-echo " Key: /etc/ssl/dnsexit/key.key"
-echo "====================================="
+echo ""
+echo "SSL:"
+echo "/etc/ssl/dnsexit/fullchain.crt"
+echo "/etc/ssl/dnsexit/key.key"
+echo ""
+echo "Nginx fallback:"
+echo "127.0.0.1:8080"
+echo ""
+echo "NEXT STEP: configure inbound in 3x-ui"
