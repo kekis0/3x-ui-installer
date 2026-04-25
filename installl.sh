@@ -3,40 +3,44 @@
 set -e
 
 echo "====================================="
-echo " SAFE INSTALL (ANTI-ERROR VERSION)"
+echo " FULL INSTALL (SSL → 3x-ui → NGINX)"
 echo "====================================="
 
 # -------------------------
 # WAIT APT LOCK
 # -------------------------
-echo "[+] Checking apt lock..."
+echo "[+] Waiting for apt lock..."
 while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-    sleep 2
+    sleep 3
 done
 
+# -------------------------
+# SYSTEM UPDATE
+# -------------------------
 export DEBIAN_FRONTEND=noninteractive
 
-apt update -y
-apt install -y curl openssl ca-certificates nginx sqlite3 jq
+apt update
+apt full-upgrade -y
+apt install -y curl openssl ca-certificates nginx sqlite3
 
 # -------------------------
 # INPUT
 # -------------------------
-read -p "DOMAIN: " DOMAIN
-read -p "DNSExit API KEY: " APIKEY
+read -p "Enter domain: " DOMAIN
+read -p "Enter DNSExit API key: " APIKEY
 
 # -------------------------
-# FOLDERS
+# DIRS
 # -------------------------
 mkdir -p /etc/dnsexit
 mkdir -p /etc/ssl/dnsexit
 mkdir -p /opt/ssl
-mkdir -p /var/www/html
+mkdir -p /var/www/site
 
-echo "OK" > /var/www/html/index.html
+echo "OK" > /var/www/site/index.html
 
 # -------------------------
-# SSL REQUEST FILES
+# API FILES
 # -------------------------
 cat > /etc/dnsexit/cert.json <<EOF
 {
@@ -57,54 +61,50 @@ cat > /etc/dnsexit/key.json <<EOF
 EOF
 
 # -------------------------
-# SAFE FETCH CERT
+# FETCH CERT
 # -------------------------
-fetch_ssl() {
-    echo "[+] Requesting SSL..."
+cat > /opt/ssl/fetch-cert.sh <<'EOF'
+#!/bin/bash
+API="https://api.dnsexit.com/dns/lse.jsp"
 
-    curl -s -H "Content-Type: application/json" \
-    --data @/etc/dnsexit/cert.json \
-    https://api.dnsexit.com/dns/lse.jsp > /etc/ssl/dnsexit/cert.crt
+curl -s -H "Content-Type: application/json" \
+--data @/etc/dnsexit/cert.json \
+$API > /etc/ssl/dnsexit/cert.crt
 
-    curl -s -H "Content-Type: application/json" \
-    --data @/etc/dnsexit/key.json \
-    https://api.dnsexit.com/dns/lse.jsp > /etc/ssl/dnsexit/key.key
+curl -s -H "Content-Type: application/json" \
+--data @/etc/dnsexit/key.json \
+$API > /etc/ssl/dnsexit/key.key
 
-    # -------------------------
-    # VALIDATE CERT
-    # -------------------------
-    if ! grep -q "BEGIN CERTIFICATE" /etc/ssl/dnsexit/cert.crt; then
-        echo "❌ ERROR: Cert is not valid (API returned garbage)"
-        cat /etc/ssl/dnsexit/cert.crt
-        exit 1
-    fi
-
-    chmod 600 /etc/ssl/dnsexit/key.key
-}
+chmod 600 /etc/ssl/dnsexit/key.key
+EOF
 
 # -------------------------
-# BUILD FULLCHAIN SAFE
+# BUILD FULLCHAIN
 # -------------------------
-build_chain() {
-    echo "[+] Building fullchain..."
+cat > /opt/ssl/build-fullchain.sh <<'EOF'
+#!/bin/bash
 
-    curl -s https://letsencrypt.org/certs/2024/r12.pem -o /etc/ssl/dnsexit/chain.pem
+CERT="/etc/ssl/dnsexit/cert.crt"
+CHAIN="/etc/ssl/dnsexit/chain.pem"
+FULLCHAIN="/etc/ssl/dnsexit/fullchain.crt"
 
-    cat /etc/ssl/dnsexit/cert.crt /etc/ssl/dnsexit/chain.pem > /etc/ssl/dnsexit/fullchain.crt
+curl -s https://letsencrypt.org/certs/2024/r12.pem -o $CHAIN
 
-    # verify
-    openssl x509 -in /etc/ssl/dnsexit/fullchain.crt -noout >/dev/null
+cat $CERT $CHAIN > $FULLCHAIN
+EOF
 
-    if [ $? -ne 0 ]; then
-        echo "❌ FULLCHAIN INVALID"
-        exit 1
-    fi
-}
+chmod +x /opt/ssl/*.sh
 
-fetch_ssl
-build_chain
+# -------------------------
+# GENERATE SSL FIRST
+# -------------------------
+echo "[+] Generating SSL..."
+/opt/ssl/fetch-cert.sh
+/opt/ssl/build-fullchain.sh
 
-echo "[+] SSL OK"
+echo "[+] SSL ready:"
+echo "/etc/ssl/dnsexit/fullchain.crt"
+echo "/etc/ssl/dnsexit/key.key"
 
 # -------------------------
 # INSTALL 3X-UI
@@ -113,26 +113,19 @@ echo "[+] Installing 3x-ui..."
 bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
 
 # -------------------------
-# FORCE SETTINGS
+# AUTO INBOUND
 # -------------------------
-echo "[+] Configuring x-ui..."
-
 UUID=$(cat /proc/sys/kernel/random/uuid)
 
 sqlite3 /etc/x-ui/x-ui.db <<EOF
-DELETE FROM inbounds;
-INSERT INTO inbounds (port, protocol, settings, stream_settings, remark, enable)
-VALUES (
-10000,
-'vless',
+INSERT INTO inbounds 
+(port, protocol, settings, stream_settings, remark, enable)
+VALUES 
+(10000, 'vless',
 '{"clients":[{"id":"$UUID"}],"decryption":"none"}',
 '{"network":"ws","security":"none","wsSettings":{"path":"/ray"}}',
-'auto',
-1
-);
+'auto', 1);
 EOF
-
-systemctl restart x-ui
 
 # -------------------------
 # NGINX CONFIG
@@ -151,8 +144,11 @@ server {
     ssl_certificate     /etc/ssl/dnsexit/fullchain.crt;
     ssl_certificate_key /etc/ssl/dnsexit/key.key;
 
+    root /var/www/site;
+    index index.html;
+
     location / {
-        root /var/www/html;
+        try_files \$uri \$uri/ =404;
     }
 
     location /ray {
@@ -160,28 +156,45 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
     }
 
     location /panel {
         proxy_pass http://127.0.0.1:2053;
     }
+
+    location /subbus {
+        proxy_pass http://127.0.0.1:2053;
+    }
 }
 EOF
 
+# -------------------------
+# RESTART
+# -------------------------
 nginx -t
 systemctl restart nginx
+systemctl restart x-ui
+
+# -------------------------
+# CRON
+# -------------------------
+(crontab -l 2>/dev/null; echo "0 4 1 * * /opt/ssl/fetch-cert.sh && /opt/ssl/build-fullchain.sh && systemctl restart nginx") | crontab -
 
 # -------------------------
 # OUTPUT
 # -------------------------
 echo "====================================="
-echo " DONE SAFE INSTALL"
+echo " DONE!"
 echo "====================================="
-echo "SITE: https://$DOMAIN"
-echo "PANEL: https://$DOMAIN/panel"
+echo "Site: https://$DOMAIN"
+echo "Panel: https://$DOMAIN/panel"
+echo "Subscription: https://$DOMAIN/subbus/..."
 echo ""
 echo "VLESS:"
+echo "Address: $DOMAIN"
+echo "Port: 443"
 echo "UUID: $UUID"
-echo "PORT: 443"
-echo "PATH: /ray"
+echo "Path: /ray"
+echo "TLS: ON"
 echo "====================================="
