@@ -189,24 +189,24 @@ cat > /etc/ufw/before.rules <<'EOF'
 -A ufw-before-output -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 -A ufw-before-forward -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
 
-# drop INVALID packets
+# drop INVALID packets (logs these in loglevel medium and higher)
 -A ufw-before-input -m conntrack --ctstate INVALID -j ufw-logging-deny
 -A ufw-before-input -m conntrack --ctstate INVALID -j DROP
 
-# block ICMP / ping
+# ok icmp codes for INPUT
 -A ufw-before-input -p icmp --icmp-type destination-unreachable -j DROP
 -A ufw-before-input -p icmp --icmp-type time-exceeded -j DROP
 -A ufw-before-input -p icmp --icmp-type parameter-problem -j DROP
 -A ufw-before-input -p icmp --icmp-type echo-request -j DROP
 -A ufw-before-input -p icmp --icmp-type source-quench -j DROP
 
-# FORWARD icmp
+# ok icmp code for FORWARD
 -A ufw-before-forward -p icmp --icmp-type destination-unreachable -j DROP
 -A ufw-before-forward -p icmp --icmp-type time-exceeded -j DROP
 -A ufw-before-forward -p icmp --icmp-type parameter-problem -j DROP
 -A ufw-before-forward -p icmp --icmp-type echo-request -j DROP
 
-# allow dhcp client
+# allow dhcp client to work
 -A ufw-before-input -p udp --sport 67 --dport 68 -j ACCEPT
 
 #
@@ -227,18 +227,24 @@ cat > /etc/ufw/before.rules <<'EOF'
 -A ufw-not-local -m limit --limit 3/min --limit-burst 10 -j ufw-logging-deny
 -A ufw-not-local -j DROP
 
-# allow MULTICAST mDNS
+# allow MULTICAST mDNS for service discovery (be sure the MULTICAST line above
+# is uncommented)
 -A ufw-before-input -p udp -d 224.0.0.251 --dport 5353 -j ACCEPT
 
-# allow MULTICAST UPnP
+# allow MULTICAST UPnP for service discovery (be sure the MULTICAST line above
+# is uncommented)
 -A ufw-before-input -p udp -d 239.255.255.250 --dport 1900 -j ACCEPT
 
+# don't delete the 'COMMIT' line or these rules won't be processed
 COMMIT
+
 EOF
 
 echo "[+] before.rules updated"
 
-ufw reload
+ufw disable
+ufw enable 
+
 
 echo "[+] Firewall configured"
 
