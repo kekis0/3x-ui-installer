@@ -91,9 +91,7 @@ chmod 600 /etc/ssl/dnsexit/key.key
 # CLOSE PORT 80
 ufw delete allow 80/tcp
 
-# RESTART PANEL
-systemctl restart x-ui 2>/dev/null || x-ui restart
-EOF
+
 
 # -------------------------
 # BUILD FULLCHAIN
