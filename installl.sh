@@ -151,6 +151,7 @@ read -p "Enter 3x-ui panel port: " PANEL_PORT
 echo "[+] Configuring firewall..."
 ufw allow OpenSSH
 ufw allow 443/tcp
+ufw allow 2096/tcp
 ufw allow ${PANEL_PORT}/tcp
 
 ufw --force enable
