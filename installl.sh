@@ -102,15 +102,24 @@ cat > /opt/ssl/build-fullchain.sh <<'EOF'
 CERT="/etc/ssl/dnsexit/cert.crt"
 CHAIN="/etc/ssl/dnsexit/chain.pem"
 FULLCHAIN="/etc/ssl/dnsexit/fullchain.crt"
+TEMP="/tmp/cert-clean.pem"
 
-# REMOVE JSON LINE
-sed -i '/^{.*"Success"}$/d' $CERT
-
+# DOWNLOAD CHAIN
 curl -s https://letsencrypt.org/certs/2024/r12.pem -o $CHAIN
 
-cat $CERT $CHAIN > $FULLCHAIN
+# CLEAN CERTIFICATE
+sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' $CERT > $TEMP
 
+# REBUILD cert.crt WITH CHAIN
+cat $TEMP $CHAIN > $CERT
+
+# CREATE FULLCHAIN
+cp $CERT $FULLCHAIN
+
+chmod 644 $CERT
 chmod 644 $FULLCHAIN
+
+rm -f $TEMP
 EOF
 
 chmod +x /opt/ssl/fetch-cert.sh
