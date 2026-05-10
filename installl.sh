@@ -111,10 +111,9 @@ curl -s https://letsencrypt.org/certs/2024/r12.pem -o $CHAIN
 sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' $CERT > $TEMP
 
 # REBUILD cert.crt WITH CHAIN
-cat $TEMP $CHAIN > $CERT
+cat $TEMP $CHAIN > $FULLCHAIN
 
-# CREATE FULLCHAIN
-cp $CERT $FULLCHAIN
+
 
 chmod 644 $CERT
 chmod 644 $FULLCHAIN
