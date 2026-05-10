@@ -103,6 +103,9 @@ CERT="/etc/ssl/dnsexit/cert.crt"
 CHAIN="/etc/ssl/dnsexit/chain.pem"
 FULLCHAIN="/etc/ssl/dnsexit/fullchain.crt"
 
+# REMOVE JSON LINE
+sed -i '/^{.*"Success"}$/d' $CERT
+
 curl -s https://letsencrypt.org/certs/2024/r12.pem -o $CHAIN
 
 cat $CERT $CHAIN > $FULLCHAIN
