@@ -88,26 +88,21 @@ API="https://api.dnsexit.com/dns/lse.jsp"
 CERT="/etc/ssl/dnsexit/cert.crt"
 KEY="/etc/ssl/dnsexit/key.key"
 
-echo "====================================="
-echo " DNSExit SSL Auto Renew"
-echo "====================================="
+echo "=== DNSExit SSL ==="
 
-# ------------------------------------------------
-# CHECK IF CERT EXISTS
-# ------------------------------------------------
+# -------------------------
+# CHECK CERT EXISTS
+# -------------------------
 
 if [ ! -f "$CERT" ]; then
-    echo "[WARN] Certificate not found locally"
-    echo "[INFO] You MUST generate SSL manually first in DNSExit panel"
-    echo "[INFO] DNSExit → SSL → Generate SSL"
-    echo ""
-    echo "Stopping script (nothing to renew yet)."
+    echo "[WARN] No certificate found"
+    echo "[INFO] Generate SSL manually in DNSExit panel"
     exit 0
 fi
 
-# ------------------------------------------------
-# CHECK EXPIRATION
-# ------------------------------------------------
+# -------------------------
+# CHECK EXPIRY
+# -------------------------
 
 EXPIRY=$(openssl x509 -enddate -noout -in $CERT | cut -d= -f2)
 EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
@@ -118,34 +113,29 @@ DAYS_LEFT=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
 echo "[+] Days left: $DAYS_LEFT"
 
 if [ "$DAYS_LEFT" -gt 30 ]; then
-    echo "[+] Certificate still valid, no renewal needed"
+    echo "[+] No renewal needed"
     exit 0
 fi
 
-echo "[+] Renewal required"
+echo "[+] Renewing SSL..."
 
-# ------------------------------------------------
-# REQUEST RENEW
-# ------------------------------------------------
-
-echo "[+] Sending renew request..."
+# -------------------------
+# RENEW
+# -------------------------
 
 curl -s \
 -H "Content-Type: application/json" \
 --data @/etc/dnsexit/renew.json \
 $API > /tmp/dnsexit-renew.log
 
-# ------------------------------------------------
-# WAIT FOR NEW CERT
-# ------------------------------------------------
-
-echo "[+] Waiting for renewed certificate..."
+# -------------------------
+# WAIT CERT
+# -------------------------
 
 SUCCESS=0
 
 for i in {1..12}; do
-
-    echo "[+] Attempt $i/12"
+    echo "[+] Attempt $i"
     sleep 10
 
     RESPONSE=$(curl -s \
@@ -155,25 +145,19 @@ for i in {1..12}; do
 
     if grep -q "BEGIN CERTIFICATE" <<< "$RESPONSE"; then
         echo "$RESPONSE" > $CERT
-        echo "[+] Certificate downloaded"
         SUCCESS=1
         break
     fi
-
-    echo "[+] Not ready yet..."
-
 done
 
 if [ "$SUCCESS" -ne 1 ]; then
-    echo "[ERROR] Failed to download certificate from DNSExit"
+    echo "[ERROR] Renew failed"
     exit 1
 fi
 
-# ------------------------------------------------
-# DOWNLOAD PRIVATE KEY
-# ------------------------------------------------
-
-echo "[+] Downloading private key..."
+# -------------------------
+# PRIVATE KEY
+# -------------------------
 
 KEY_RESPONSE=$(curl -s \
 -H "Content-Type: application/json" \
@@ -183,44 +167,20 @@ $API)
 if grep -q "BEGIN PRIVATE KEY" <<< "$KEY_RESPONSE"; then
     echo "$KEY_RESPONSE" > $KEY
     chmod 600 $KEY
-    echo "[+] Private key updated"
 else
-    echo "[ERROR] Failed to download private key"
+    echo "[ERROR] Key failed"
     exit 1
 fi
 
-# ------------------------------------------------
-# REBUILD FULLCHAIN
-# ------------------------------------------------
+# -------------------------
+# RESTART
+# -------------------------
 
-echo "[+] Rebuilding fullchain..."
-
-CHAIN="/etc/ssl/dnsexit/chain.pem"
-FULLCHAIN="/etc/ssl/dnsexit/fullchain.crt"
-TMP="/tmp/cert-clean.pem"
-
-curl -s https://letsencrypt.org/certs/2024/r12.pem -o $CHAIN
-
-sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' $CERT > $TMP
-
-cat $TMP $CHAIN > $FULLCHAIN
-
-chmod 644 $CERT
-chmod 644 $FULLCHAIN
-
-rm -f $TMP
-
-# ------------------------------------------------
-# RESTART SERVICE
-# ------------------------------------------------
-
-echo "[+] Restarting 3x-ui..."
 systemctl restart x-ui || true
 
-echo "[+] SSL update complete"
+echo "[+] Done"
 
 EOF
-
 
 # -------------------------
 # BUILD FULLCHAIN
