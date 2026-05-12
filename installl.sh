@@ -89,24 +89,20 @@ CERT="/etc/ssl/dnsexit/cert.crt"
 KEY="/etc/ssl/dnsexit/key.key"
 
 echo "====================================="
-echo " DNSExit SSL Auto-Renew"
+echo " DNSExit SSL Auto Renew"
 echo "====================================="
 
 # ------------------------------------------------
-# CHECK EXISTING CERTIFICATE
+# CHECK IF CERT EXISTS
 # ------------------------------------------------
 
-NEED_RENEW=0
-
 if [ ! -f "$CERT" ]; then
-
-    echo "[ERROR] Certificate not found"
-    echo "[ERROR] First SSL must be generated manually in DNSExit panel"
+    echo "[WARN] Certificate not found locally"
+    echo "[INFO] You MUST generate SSL manually first in DNSExit panel"
+    echo "[INFO] DNSExit → SSL → Generate SSL"
     echo ""
-    echo "DNSExit -> Free SSL Certificates -> Generate SSL"
-
-    exit 1
-
+    echo "Stopping script (nothing to renew yet)."
+    exit 0
 fi
 
 # ------------------------------------------------
@@ -117,144 +113,111 @@ EXPIRY=$(openssl x509 -enddate -noout -in $CERT | cut -d= -f2)
 EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
 NOW_EPOCH=$(date +%s)
 
-DAYS_LEFT=$(( ($EXPIRY_EPOCH - $NOW_EPOCH) / 86400 ))
+DAYS_LEFT=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
 
 echo "[+] Days left: $DAYS_LEFT"
 
-if [ $DAYS_LEFT -le 30 ]; then
-
-    echo "[+] Certificate renewal required"
-
-    NEED_RENEW=1
-
-else
-
-    echo "[+] Certificate is still valid"
-
+if [ "$DAYS_LEFT" -gt 30 ]; then
+    echo "[+] Certificate still valid, no renewal needed"
+    exit 0
 fi
 
+echo "[+] Renewal required"
+
 # ------------------------------------------------
-# RENEW CERTIFICATE
+# REQUEST RENEW
 # ------------------------------------------------
 
-if [ $NEED_RENEW -eq 1 ]; then
+echo "[+] Sending renew request..."
 
-    echo "[+] Sending renew request..."
+curl -s \
+-H "Content-Type: application/json" \
+--data @/etc/dnsexit/renew.json \
+$API > /tmp/dnsexit-renew.log
 
-    curl -s \
+# ------------------------------------------------
+# WAIT FOR NEW CERT
+# ------------------------------------------------
+
+echo "[+] Waiting for renewed certificate..."
+
+SUCCESS=0
+
+for i in {1..12}; do
+
+    echo "[+] Attempt $i/12"
+    sleep 10
+
+    RESPONSE=$(curl -s \
     -H "Content-Type: application/json" \
-    --data @/etc/dnsexit/renew.json \
-    $API > /tmp/dnsexit-renew.log
-
-    echo "[+] Waiting for renewed certificate..."
-
-    SUCCESS=0
-
-    for i in {1..12}; do
-
-        echo "[+] Attempt $i/12"
-
-        sleep 10
-
-        RESPONSE=$(curl -s \
-        -H "Content-Type: application/json" \
-        --data @/etc/dnsexit/cert.json \
-        $API)
-
-        if grep -q "BEGIN CERTIFICATE" <<< "$RESPONSE"; then
-
-            echo "$RESPONSE" > $CERT
-
-            echo "[+] Certificate downloaded"
-
-            SUCCESS=1
-
-            break
-        fi
-
-        echo "[+] Certificate not ready yet"
-
-    done
-
-    # ------------------------------------------------
-    # VALIDATE CERTIFICATE DOWNLOAD
-    # ------------------------------------------------
-
-    if [ $SUCCESS -ne 1 ]; then
-
-        echo "[ERROR] Failed to download renewed certificate"
-
-        exit 1
-    fi
-
-    # ------------------------------------------------
-    # DOWNLOAD PRIVATE KEY
-    # ------------------------------------------------
-
-    echo "[+] Downloading private key..."
-
-    KEY_RESPONSE=$(curl -s \
-    -H "Content-Type: application/json" \
-    --data @/etc/dnsexit/key.json \
+    --data @/etc/dnsexit/cert.json \
     $API)
 
-    if grep -q "BEGIN PRIVATE KEY" <<< "$KEY_RESPONSE"; then
-
-        echo "$KEY_RESPONSE" > $KEY
-
-        chmod 600 $KEY
-
-        echo "[+] Private key downloaded"
-
-    else
-
-        echo "[ERROR] Failed to download private key"
-
-        exit 1
+    if grep -q "BEGIN CERTIFICATE" <<< "$RESPONSE"; then
+        echo "$RESPONSE" > $CERT
+        echo "[+] Certificate downloaded"
+        SUCCESS=1
+        break
     fi
 
-    # ------------------------------------------------
-    # REBUILD FULLCHAIN
-    # ------------------------------------------------
+    echo "[+] Not ready yet..."
 
-    echo "[+] Rebuilding fullchain..."
+done
 
-    CHAIN="/etc/ssl/dnsexit/chain.pem"
-    FULLCHAIN="/etc/ssl/dnsexit/fullchain.crt"
-    TEMP="/tmp/cert-clean.pem"
-
-    curl -s https://letsencrypt.org/certs/2024/r12.pem -o $CHAIN
-
-    sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' $CERT > $TEMP
-
-    cat $TEMP $CHAIN > $FULLCHAIN
-
-    chmod 644 $CERT
-    chmod 644 $FULLCHAIN
-
-    rm -f $TEMP
-
-    echo "[+] Fullchain rebuilt"
-
-    # ------------------------------------------------
-    # RESTART 3X-UI
-    # ------------------------------------------------
-
-    echo "[+] Restarting 3x-ui..."
-
-    systemctl restart x-ui || true
-
-    echo "[+] SSL successfully renewed"
-
-else
-
-    echo "[+] Renewal not required"
-
+if [ "$SUCCESS" -ne 1 ]; then
+    echo "[ERROR] Failed to download certificate from DNSExit"
+    exit 1
 fi
 
-echo "====================================="
-echo " DONE"
-echo "====================================="
+# ------------------------------------------------
+# DOWNLOAD PRIVATE KEY
+# ------------------------------------------------
+
+echo "[+] Downloading private key..."
+
+KEY_RESPONSE=$(curl -s \
+-H "Content-Type: application/json" \
+--data @/etc/dnsexit/key.json \
+$API)
+
+if grep -q "BEGIN PRIVATE KEY" <<< "$KEY_RESPONSE"; then
+    echo "$KEY_RESPONSE" > $KEY
+    chmod 600 $KEY
+    echo "[+] Private key updated"
+else
+    echo "[ERROR] Failed to download private key"
+    exit 1
+fi
+
+# ------------------------------------------------
+# REBUILD FULLCHAIN
+# ------------------------------------------------
+
+echo "[+] Rebuilding fullchain..."
+
+CHAIN="/etc/ssl/dnsexit/chain.pem"
+FULLCHAIN="/etc/ssl/dnsexit/fullchain.crt"
+TMP="/tmp/cert-clean.pem"
+
+curl -s https://letsencrypt.org/certs/2024/r12.pem -o $CHAIN
+
+sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' $CERT > $TMP
+
+cat $TMP $CHAIN > $FULLCHAIN
+
+chmod 644 $CERT
+chmod 644 $FULLCHAIN
+
+rm -f $TMP
+
+# ------------------------------------------------
+# RESTART SERVICE
+# ------------------------------------------------
+
+echo "[+] Restarting 3x-ui..."
+systemctl restart x-ui || true
+
+echo "[+] SSL update complete"
 
 EOF
 
