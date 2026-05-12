@@ -81,105 +81,17 @@ EOF
 cat > /opt/ssl/fetch-cert.sh <<'EOF'
 #!/bin/bash
 
-set -e
-
 API="https://api.dnsexit.com/dns/lse.jsp"
 
-CERT="/etc/ssl/dnsexit/cert.crt"
-KEY="/etc/ssl/dnsexit/key.key"
+curl -s -H "Content-Type: application/json" \
+--data @/etc/dnsexit/cert.json \
+$API > /etc/ssl/dnsexit/cert.crt
 
-echo "=== DNSExit SSL ==="
-
-# -------------------------
-# CHECK CERT EXISTS
-# -------------------------
-
-if [ ! -f "$CERT" ]; then
-    echo "[WARN] No certificate found"
-    echo "[INFO] Generate SSL manually in DNSExit panel"
-    exit 0
-fi
-
-# -------------------------
-# CHECK EXPIRY
-# -------------------------
-
-EXPIRY=$(openssl x509 -enddate -noout -in $CERT | cut -d= -f2)
-EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
-NOW_EPOCH=$(date +%s)
-
-DAYS_LEFT=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
-
-echo "[+] Days left: $DAYS_LEFT"
-
-if [ "$DAYS_LEFT" -gt 30 ]; then
-    echo "[+] No renewal needed"
-    exit 0
-fi
-
-echo "[+] Renewing SSL..."
-
-# -------------------------
-# RENEW
-# -------------------------
-
-curl -s \
--H "Content-Type: application/json" \
---data @/etc/dnsexit/renew.json \
-$API > /tmp/dnsexit-renew.log
-
-# -------------------------
-# WAIT CERT
-# -------------------------
-
-SUCCESS=0
-
-for i in {1..12}; do
-    echo "[+] Attempt $i"
-    sleep 10
-
-    RESPONSE=$(curl -s \
-    -H "Content-Type: application/json" \
-    --data @/etc/dnsexit/cert.json \
-    $API)
-
-    if grep -q "BEGIN CERTIFICATE" <<< "$RESPONSE"; then
-        echo "$RESPONSE" > $CERT
-        SUCCESS=1
-        break
-    fi
-done
-
-if [ "$SUCCESS" -ne 1 ]; then
-    echo "[ERROR] Renew failed"
-    exit 1
-fi
-
-# -------------------------
-# PRIVATE KEY
-# -------------------------
-
-KEY_RESPONSE=$(curl -s \
--H "Content-Type: application/json" \
+curl -s -H "Content-Type: application/json" \
 --data @/etc/dnsexit/key.json \
-$API)
+$API > /etc/ssl/dnsexit/key.key
 
-if grep -q "BEGIN PRIVATE KEY" <<< "$KEY_RESPONSE"; then
-    echo "$KEY_RESPONSE" > $KEY
-    chmod 600 $KEY
-else
-    echo "[ERROR] Key failed"
-    exit 1
-fi
-
-# -------------------------
-# RESTART
-# -------------------------
-
-systemctl restart x-ui || true
-
-echo "[+] Done"
-
+chmod 600 /etc/ssl/dnsexit/key.key
 EOF
 
 # -------------------------
