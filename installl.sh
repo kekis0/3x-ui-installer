@@ -67,29 +67,167 @@ cat > /etc/dnsexit/key.json <<EOF
 }
 EOF
 
+cat > /etc/dnsexit/generate.json <<EOF
+{
+  "apikey": "$APIKEY",
+  "domain": "$DOMAIN",
+  "action": "generate"
+}
+EOF
+
+cat > /etc/dnsexit/renew.json <<EOF
+{
+  "apikey": "$APIKEY",
+  "domain": "$DOMAIN",
+  "action": "renew"
+}
+EOF
+
 # -------------------------
 # FETCH SCRIPT
 # -------------------------
 cat > /opt/ssl/fetch-cert.sh <<'EOF'
 #!/bin/bash
 
+set -e
+
 API="https://api.dnsexit.com/dns/lse.jsp"
 
-# OPEN PORT 80
-ufw allow 80/tcp
+CERT="/etc/ssl/dnsexit/cert.crt"
+KEY="/etc/ssl/dnsexit/key.key"
 
-curl -s -H "Content-Type: application/json" \
---data @/etc/dnsexit/cert.json \
-$API > /etc/ssl/dnsexit/cert.crt
+# ------------------------------------------------
+# CHECK CERTIFICATE
+# ------------------------------------------------
 
-curl -s -H "Content-Type: application/json" \
+NEED_RENEW=0
+
+if [ ! -f "$CERT" ]; then
+
+    echo "[+] Certificate not found"
+
+    NEED_RENEW=1
+
+else
+
+    EXPIRY=$(openssl x509 -enddate -noout -in $CERT | cut -d= -f2)
+    EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
+    NOW_EPOCH=$(date +%s)
+
+    DAYS_LEFT=$(( ($EXPIRY_EPOCH - $NOW_EPOCH) / 86400 ))
+
+    echo "[+] Days left: $DAYS_LEFT"
+
+    if [ $DAYS_LEFT -le 30 ]; then
+
+        echo "[+] Certificate renewal required"
+
+        NEED_RENEW=1
+    fi
+fi
+
+# ------------------------------------------------
+# GENERATE OR RENEW
+# ------------------------------------------------
+
+if [ $NEED_RENEW -eq 1 ]; then
+
+    if [ ! -f "$CERT" ]; then
+
+        echo "[+] Generating certificate..."
+
+        curl -s \
+        -H "Content-Type: application/json" \
+        --data @/etc/dnsexit/generate.json \
+        $API
+
+    else
+
+        echo "[+] Renewing certificate..."
+
+        curl -s \
+        -H "Content-Type: application/json" \
+        --data @/etc/dnsexit/renew.json \
+        $API
+    fi
+fi
+
+# ------------------------------------------------
+# WAIT AND DOWNLOAD CERTIFICATE
+# ------------------------------------------------
+
+echo "[+] Waiting for certificate readiness..."
+
+rm -f $CERT
+rm -f $KEY
+
+SUCCESS=0
+
+for i in {1..12}; do
+
+    echo "[+] Attempt $i/12"
+
+    sleep 10
+
+    RESPONSE=$(curl -s \
+    -H "Content-Type: application/json" \
+    --data @/etc/dnsexit/cert.json \
+    $API)
+
+    if grep -q "BEGIN CERTIFICATE" <<< "$RESPONSE"; then
+
+        echo "$RESPONSE" > $CERT
+
+        echo "[+] Certificate downloaded"
+
+        SUCCESS=1
+
+        break
+    fi
+
+    echo "[+] Certificate not ready yet"
+
+done
+
+# ------------------------------------------------
+# VALIDATE CERTIFICATE
+# ------------------------------------------------
+
+if [ $SUCCESS -ne 1 ]; then
+
+    echo "[ERROR] Certificate generation failed"
+
+    exit 1
+fi
+
+# ------------------------------------------------
+# DOWNLOAD PRIVATE KEY
+# ------------------------------------------------
+
+echo "[+] Downloading private key..."
+
+KEY_RESPONSE=$(curl -s \
+-H "Content-Type: application/json" \
 --data @/etc/dnsexit/key.json \
-$API > /etc/ssl/dnsexit/key.key
+$API)
 
-chmod 600 /etc/ssl/dnsexit/key.key
+if grep -q "BEGIN PRIVATE KEY" <<< "$KEY_RESPONSE"; then
 
-# CLOSE PORT 80
-ufw delete allow 80/tcp
+    echo "$KEY_RESPONSE" > $KEY
+
+    chmod 600 $KEY
+
+    echo "[+] Private key downloaded"
+
+else
+
+    echo "[ERROR] Failed to download private key"
+
+    exit 1
+fi
+
+echo "[+] SSL updated"
+
 EOF
 
 
